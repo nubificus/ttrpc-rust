@@ -79,9 +79,12 @@ pub fn do_bind(host: &str) -> Result<(RawFd, Domain)> {
                 None,
             )
             .map_err(|e| Error::Socket(e.to_string()))?;
+            /*
             let sockaddr_h = hostv[1].to_owned() + &"\x00".to_string();
             let sockaddr_u =
                 UnixAddr::new_abstract(sockaddr_h.as_bytes()).map_err(err_to_others_err!(e, ""))?;
+            */
+            let sockaddr_u = UnixAddr::new(hostv[1]).map_err(err_to_others_err!(e, ""))?;
             sockaddr = SockAddr::Unix(sockaddr_u);
         }
         Domain::Vsock => {
