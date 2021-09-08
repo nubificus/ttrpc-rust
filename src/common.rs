@@ -200,7 +200,7 @@ macro_rules! cfg_async {
 }
 
 pub const MESSAGE_HEADER_LENGTH: usize = 10;
-pub const MESSAGE_LENGTH_MAX: usize = 4 << 20;
+pub const MESSAGE_LENGTH_MAX: usize = 1 << 30;
 
 pub const MESSAGE_TYPE_REQUEST: u8 = 0x1;
 pub const MESSAGE_TYPE_RESPONSE: u8 = 0x2;
