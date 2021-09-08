@@ -16,7 +16,7 @@ use protobuf::{CodedInputStream, CodedOutputStream};
 use crate::error::{get_rpc_status, Error, Result as TtResult};
 
 pub const MESSAGE_HEADER_LENGTH: usize = 10;
-pub const MESSAGE_LENGTH_MAX: usize = 4 << 20;
+pub const MESSAGE_LENGTH_MAX: usize = 1 << 30;
 pub const DEFAULT_PAGE_SIZE: usize = 4 << 10;
 
 pub const MESSAGE_TYPE_REQUEST: u8 = 0x1;
