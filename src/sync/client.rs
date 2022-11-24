@@ -225,32 +225,36 @@ impl Client {
             .send((buf, tx))
             .map_err(err_to_others_err!(e, "Send packet to sender error "))?;
 
-        let result: Result<Vec<u8>>;
-        if req.timeout_nano == 0 {
-            result = rx
-                .recv()
-                .map_err(err_to_others_err!(e, "Receive packet from recver error: "))?;
-        } else {
-            result = rx
-                .recv_timeout(Duration::from_nanos(req.timeout_nano as u64))
-                .map_err(err_to_others_err!(
-                    e,
-                    "Receive packet from recver timeout: "
-                ))?;
-        }
+        let t = thread::spawn(move || {
+            let result: Result<Vec<u8>>;
+            if req.timeout_nano == 0 {
+                result = rx
+                    .recv()
+                    .map_err(err_to_others_err!(e, "Receive packet from recver error: "))?;
+            } else {
+                result = rx
+                    .recv_timeout(Duration::from_nanos(req.timeout_nano as u64))
+                    .map_err(err_to_others_err!(
+                            e,
+                            "Receive packet from recver timeout: "
+                            ))?;
+            }
 
-        let buf = result?;
-        let mut s = CodedInputStream::from_bytes(&buf);
-        let mut res = Response::new();
-        res.merge_from(&mut s)
-            .map_err(err_to_others_err!(e, "Unpack response error "))?;
+            let buf = result?;
+            let mut s = CodedInputStream::from_bytes(&buf);
+            let mut res = Response::new();
+            res.merge_from(&mut s)
+                .map_err(err_to_others_err!(e, "Unpack response error "))?;
 
-        let status = res.get_status();
-        if status.get_code() != Code::OK {
-            return Err(Error::RpcStatus((*status).clone()));
-        }
+            let status = res.get_status();
+            if status.get_code() != Code::OK {
+                return Err(Error::RpcStatus((*status).clone()));
+            }
 
-        Ok(res)
+            Ok(res)
+        });
+
+        t.join().unwrap()
     }
 }
 
