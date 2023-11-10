@@ -13,7 +13,7 @@ mod stream;
 mod utils;
 mod connection;
 pub mod shutdown;
-mod unix_incoming;
+mod tokio_incoming;
 
 pub use self::stream::{
     CSReceiver, CSSender, ClientStream, ClientStreamReceiver, ClientStreamSender, Kind, SSReceiver,
