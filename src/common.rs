@@ -13,13 +13,15 @@
 use nix::fcntl::FdFlag;
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::sys::socket::*;
-use std::os::unix::io::RawFd;
+use std::str::FromStr;
+use std::{env, os::unix::io::RawFd};
 
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Domain {
     Unix,
+    Tcp,
     #[cfg(any(target_os = "linux", target_os = "android"))]
     Vsock,
 }
@@ -42,6 +44,10 @@ fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
 
     if let Some(addr) = addr.strip_prefix("vsock://") {
         return Ok((Domain::Vsock, addr));
+    }
+
+    if let Some(addr) = addr.strip_prefix("tcp://") {
+        return Ok((Domain::Tcp, addr));
     }
 
     Err(Error::Others(format!("Scheme {addr:?} is not supported")))
@@ -90,8 +96,8 @@ fn make_addr(domain: Domain, sockaddr: &str) -> Result<UnixAddr> {
                 UnixAddr::new(sockaddr).map_err(err_to_others_err!(e, ""))
             }
         }
-        Domain::Vsock => Err(Error::Others(
-            "function make_addr does not support create vsock socket".to_string(),
+        Domain::Vsock | Domain::Tcp => Err(Error::Others(
+            "function make_addr does not support create vsock/tcp socket".to_string(),
         )),
     }
 }
@@ -137,7 +143,7 @@ fn parse_vscok(addr: &str) -> Result<(u32, u32)> {
 fn make_socket(sockaddr: &str) -> Result<(RawFd, Domain, Box<dyn SockaddrLike>)> {
     let (domain, sockaddrv) = parse_sockaddr(sockaddr)?;
 
-    let get_sock_addr = |domain, sockaddr| -> Result<(RawFd, Box<dyn SockaddrLike>)> {
+    let get_unix_addr = |domain, sockaddr| -> Result<(RawFd, Box<dyn SockaddrLike>)> {
         let fd = socket(AddressFamily::Unix, SockType::Stream, SOCK_CLOEXEC, None)
             .map_err(|e| Error::Socket(e.to_string()))?;
 
@@ -148,9 +154,25 @@ fn make_socket(sockaddr: &str) -> Result<(RawFd, Domain, Box<dyn SockaddrLike>)>
         let sockaddr = make_addr(domain, sockaddr)?;
         Ok((fd, Box::new(sockaddr)))
     };
+    let get_tcp_addr = |sockaddr: &str| -> Result<(RawFd, Box<dyn SockaddrLike>)> {
+        let fd = socket(
+            AddressFamily::Inet,
+            SockType::Stream,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .map_err(|e| Error::Socket(e.to_string()))?;
+
+        #[cfg(target_os = "macos")]
+        set_fd_close_exec(fd)?;
+        let sockaddr = SockaddrIn::from_str(sockaddr).map_err(err_to_others_err!(e, ""))?;
+
+        Ok((fd, Box::new(sockaddr)))
+    };
 
     let (fd, sockaddr): (i32, Box<dyn SockaddrLike>) = match domain {
-        Domain::Unix => get_sock_addr(domain, sockaddrv)?,
+        Domain::Unix => get_unix_addr(domain, sockaddrv)?,
+        Domain::Tcp => get_tcp_addr(sockaddrv)?,
         #[cfg(any(target_os = "linux", target_os = "android"))]
         Domain::Vsock => {
             let (cid, port) = parse_vscok(sockaddrv)?;
@@ -169,9 +191,31 @@ fn make_socket(sockaddr: &str) -> Result<(RawFd, Domain, Box<dyn SockaddrLike>)>
     Ok((fd, domain, sockaddr))
 }
 
+fn set_socket_opts(fd: RawFd, domain: Domain, is_bind: bool) -> Result<()> {
+    if domain != Domain::Tcp {
+        return Ok(());
+    }
+
+    if is_bind {
+        setsockopt(fd, sockopt::ReusePort, &true)?;
+    }
+
+    let tcp_nodelay_enabled = match env::var("TTRPC_TCP_NODELAY_ENABLED") {
+        Ok(val) if val == "1" || val.eq_ignore_ascii_case("true") => true,
+        Ok(val) if val == "0" || val.eq_ignore_ascii_case("false") => false,
+        _ => false,
+    };
+    if tcp_nodelay_enabled {
+        setsockopt(fd, sockopt::TcpNoDelay, &true)?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn do_bind(sockaddr: &str) -> Result<(RawFd, Domain)> {
     let (fd, domain, sockaddr) = make_socket(sockaddr)?;
 
+    set_socket_opts(fd, domain, true)?;
     bind(fd, sockaddr.as_ref()).map_err(err_to_others_err!(e, ""))?;
 
     Ok((fd, domain))
@@ -179,8 +223,9 @@ pub(crate) fn do_bind(sockaddr: &str) -> Result<(RawFd, Domain)> {
 
 /// Creates a unix socket for client.
 pub(crate) unsafe fn client_connect(sockaddr: &str) -> Result<RawFd> {
-    let (fd, _, sockaddr) = make_socket(sockaddr)?;
+    let (fd, domain, sockaddr) = make_socket(sockaddr)?;
 
+    set_socket_opts(fd, domain, false)?;
     connect(fd, sockaddr.as_ref())?;
 
     Ok(fd)
