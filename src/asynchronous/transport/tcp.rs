@@ -40,11 +40,28 @@ impl Socket {
     }
 }
 
+/// Mirror the sync `common::set_socket_opts` behaviour for the
+/// async TCP path: honour `TTRPC_TCP_NODELAY_ENABLED`. Upstream
+/// only reads the env var in the sync transport, so every async
+/// call pays Nagle's delay (~40 ms/call on localhost).
+fn tcp_nodelay_enabled() -> bool {
+    match std::env::var("TTRPC_TCP_NODELAY_ENABLED") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(_) => false,
+    }
+}
+
 impl From<TcpListener> for Listener {
     fn from(listener: TcpListener) -> Self {
+        let nodelay = tcp_nodelay_enabled();
         Self::new(stream! {
             loop {
-                yield listener.accept().await.map(|(socket, _)| socket);
+                yield listener.accept().await.map(|(socket, _)| {
+                    if nodelay {
+                        let _ = socket.set_nodelay(true);
+                    }
+                    socket
+                });
             }
         })
     }
@@ -60,6 +77,9 @@ impl TryFrom<StdTcpListener> for Listener {
 
 impl From<TcpStream> for Socket {
     fn from(socket: TcpStream) -> Self {
+        if tcp_nodelay_enabled() {
+            let _ = socket.set_nodelay(true);
+        }
         Self::new(socket)
     }
 }
